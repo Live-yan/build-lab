@@ -1,5 +1,5 @@
 param(
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot "..\dist"),
+    [string]$OutputDirectory = "dist",
     [int]$JavaVersion = 25
 )
 
