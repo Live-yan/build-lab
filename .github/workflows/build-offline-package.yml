@@ -1,0 +1,127 @@
+name: Build Kafbat UI Offline Windows Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-offline-package.yml"
+      - "scripts/build-offline-package.ps1"
+      - "README.md"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify Windows x64 offline package
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build offline package
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: .\scripts\build-offline-package.ps1
+
+      - name: Verify bundled Java runtime
+        shell: pwsh
+        run: .\dist\KafbatUI\jre\bin\java.exe -version
+
+      - name: Smoke test Kafbat UI
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = (Resolve-Path ".\dist\KafbatUI").Path
+          $java = Join-Path $package "jre\bin\java.exe"
+          $jar = Join-Path $package "api.jar"
+          $stdout = Join-Path $package "logs\smoke-stdout.log"
+          $stderr = Join-Path $package "logs\smoke-stderr.log"
+
+          $env:DYNAMIC_CONFIG_ENABLED = "true"
+          $env:DYNAMIC_CONFIG_PATH = Join-Path $package "data\dynamic_config.yaml"
+          $env:CONFIG_RELATED_UPLOADS_DIR = Join-Path $package "data\uploads"
+
+          $arguments = @(
+            "--add-opens",
+            "java.rmi/javax.rmi.ssl=ALL-UNNAMED",
+            "-jar",
+            $jar,
+            "--server.port=18080"
+          )
+
+          $process = Start-Process `
+            -FilePath $java `
+            -ArgumentList $arguments `
+            -PassThru `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+
+          $healthy = $false
+          try {
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 2
+
+              if ($process.HasExited) {
+                throw "Kafbat UI exited before becoming healthy. Exit code: $($process.ExitCode)"
+              }
+
+              try {
+                $health = Invoke-RestMethod `
+                  -Uri "http://127.0.0.1:18080/actuator/health" `
+                  -TimeoutSec 5
+                if ($health.status -eq "UP") {
+                  $healthy = $true
+                  Write-Host "Kafbat UI health check returned UP."
+                  break
+                }
+              }
+              catch {
+                Write-Host "Waiting for Kafbat UI to become healthy..."
+              }
+            }
+
+            if (-not $healthy) {
+              throw "Kafbat UI did not become healthy within 120 seconds."
+            }
+          }
+          finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+
+      - name: Show package version information
+        shell: pwsh
+        run: Get-Content .\dist\KafbatUI\VERSION.txt
+
+      - name: Upload smoke-test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kafbat-ui-smoke-test-logs
+          path: dist/KafbatUI/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove smoke-test logs from final package
+        if: success()
+        shell: pwsh
+        run: |
+          Remove-Item .\dist\KafbatUI\logs\smoke-stdout.log -Force -ErrorAction SilentlyContinue
+          Remove-Item .\dist\KafbatUI\logs\smoke-stderr.log -Force -ErrorAction SilentlyContinue
+
+      - name: Upload offline package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kafbat-ui-offline-windows-x64
+          path: dist/KafbatUI
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 30
