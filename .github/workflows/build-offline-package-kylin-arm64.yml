@@ -1,0 +1,189 @@
+name: Build Kafbat UI Offline Kylin ARM64 Package
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-offline-package-kylin-arm64.yml"
+      - "scripts/build-offline-package-linux-arm64.sh"
+      - "README.md"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-offline-package-kylin-arm64.yml"
+      - "scripts/build-offline-package-linux-arm64.sh"
+      - "README.md"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and verify Kylin V10 SP3 ARM64 offline package
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show native runner architecture
+        shell: bash
+        run: |
+          set -euxo pipefail
+          uname -a
+          uname -m
+          test "$(uname -m)" = "aarch64"
+
+      - name: Ensure ELF inspection tools
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils file curl
+
+      - name: Build offline ARM64 package
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash ./scripts/build-offline-package-linux-arm64.sh
+
+      - name: Verify bundled Java is ARM64
+        shell: bash
+        run: |
+          set -euxo pipefail
+          JAVA=./dist-linux-arm64/KafbatUI-Kylin-ARM64/jre/bin/java
+          file "$JAVA"
+          file "$JAVA" | grep -Eiq 'ARM aarch64|aarch64'
+          "$JAVA" -version
+
+      - name: Check bundled JRE glibc compatibility for Kylin V10 SP3
+        shell: bash
+        run: |
+          set -euo pipefail
+          JRE=./dist-linux-arm64/KafbatUI-Kylin-ARM64/jre
+          REPORT=./dist-linux-arm64/KafbatUI-Kylin-ARM64/COMPATIBILITY.txt
+
+          REQUIRED_VERSIONS="$({
+            while IFS= read -r -d '' f; do
+              if file "$f" | grep -q 'ELF'; then
+                readelf --version-info "$f" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' || true
+              fi
+            done < <(find "$JRE" -type f -print0)
+          } | sort -Vu)"
+
+          MAX_GLIBC="$(printf '%s\n' "$REQUIRED_VERSIONS" | sed '/^$/d' | sort -V | tail -n 1)"
+          if [[ -z "$MAX_GLIBC" ]]; then
+            echo "Could not determine GLIBC requirements for the bundled JRE." >&2
+            exit 1
+          fi
+
+          MAX_VERSION="${MAX_GLIBC#GLIBC_}"
+          echo "Bundled JRE maximum detected GLIBC requirement: $MAX_GLIBC"
+
+          if [[ "$(printf '%s\n' '2.28' "$MAX_VERSION" | sort -V | tail -n 1)" != "2.28" ]]; then
+            echo "Bundled JRE requires $MAX_GLIBC, which is newer than Kylin V10 SP3's GLIBC 2.28 baseline." >&2
+            exit 1
+          fi
+
+          {
+            echo "Target: Galaxy Kylin Advanced Server OS V10 SP3 aarch64"
+            echo "Kylin baseline used by this build check: GLIBC 2.28"
+            echo "Maximum GLIBC requirement detected in bundled JRE: $MAX_GLIBC"
+            echo "Result: PASS (no detected JRE ELF dependency newer than GLIBC 2.28)"
+            echo
+            echo "Detected GLIBC symbol versions:"
+            printf '%s\n' "$REQUIRED_VERSIONS"
+          } > "$REPORT"
+
+          cat "$REPORT"
+
+      - name: Smoke test Kafbat UI on native ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE="$(realpath ./dist-linux-arm64/KafbatUI-Kylin-ARM64)"
+          JAVA="$PACKAGE/jre/bin/java"
+          JAR="$PACKAGE/api.jar"
+          STDOUT="$PACKAGE/logs/smoke-stdout.log"
+          STDERR="$PACKAGE/logs/smoke-stderr.log"
+
+          export DYNAMIC_CONFIG_ENABLED=true
+          export DYNAMIC_CONFIG_PATH="$PACKAGE/data/dynamic_config.yaml"
+          export CONFIG_RELATED_UPLOADS_DIR="$PACKAGE/data/uploads"
+          export SERVER_ADDRESS=127.0.0.1
+
+          "$JAVA" \
+            --add-opens java.rmi/javax.rmi.ssl=ALL-UNNAMED \
+            -jar "$JAR" \
+            --server.port=18080 \
+            >"$STDOUT" 2>"$STDERR" &
+          PID=$!
+
+          cleanup() {
+            kill "$PID" 2>/dev/null || true
+            wait "$PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          HEALTHY=false
+          for _ in $(seq 1 60); do
+            sleep 2
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "Kafbat UI exited before becoming healthy." >&2
+              tail -n 120 "$STDOUT" >&2 || true
+              tail -n 120 "$STDERR" >&2 || true
+              exit 1
+            fi
+            if curl -fsS --max-time 5 http://127.0.0.1:18080/actuator/health | grep -q '"status"[[:space:]]*:[[:space:]]*"UP"'; then
+              HEALTHY=true
+              echo "Kafbat UI health check returned UP on native ARM64."
+              break
+            fi
+          done
+
+          if [[ "$HEALTHY" != true ]]; then
+            echo "Kafbat UI did not become healthy within 120 seconds." >&2
+            tail -n 120 "$STDOUT" >&2 || true
+            tail -n 120 "$STDERR" >&2 || true
+            exit 1
+          fi
+
+      - name: Show package version information
+        shell: bash
+        run: cat ./dist-linux-arm64/KafbatUI-Kylin-ARM64/VERSION.txt
+
+      - name: Upload smoke-test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kafbat-ui-kylin-arm64-smoke-test-logs
+          path: dist-linux-arm64/KafbatUI-Kylin-ARM64/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Remove smoke-test logs
+        if: success()
+        shell: bash
+        run: rm -f ./dist-linux-arm64/KafbatUI-Kylin-ARM64/logs/smoke-stdout.log ./dist-linux-arm64/KafbatUI-Kylin-ARM64/logs/smoke-stderr.log
+
+      - name: Create tar.gz preserving Linux executable permissions
+        if: success()
+        shell: bash
+        run: |
+          tar -C ./dist-linux-arm64 -czf ./dist-linux-arm64/kafbat-ui-offline-kylin-v10sp3-arm64.tar.gz KafbatUI-Kylin-ARM64
+          sha256sum ./dist-linux-arm64/kafbat-ui-offline-kylin-v10sp3-arm64.tar.gz | tee ./dist-linux-arm64/kafbat-ui-offline-kylin-v10sp3-arm64.tar.gz.sha256
+
+      - name: Upload Kylin ARM64 offline package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kafbat-ui-offline-kylin-v10sp3-arm64
+          path: |
+            dist-linux-arm64/kafbat-ui-offline-kylin-v10sp3-arm64.tar.gz
+            dist-linux-arm64/kafbat-ui-offline-kylin-v10sp3-arm64.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
