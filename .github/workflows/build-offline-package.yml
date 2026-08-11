@@ -9,6 +9,13 @@ on:
       - ".github/workflows/build-offline-package.yml"
       - "scripts/build-offline-package.ps1"
       - "README.md"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-offline-package.yml"
+      - "scripts/build-offline-package.ps1"
+      - "README.md"
 
 permissions:
   contents: read
