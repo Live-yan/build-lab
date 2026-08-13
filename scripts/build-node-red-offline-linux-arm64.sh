@@ -116,12 +116,13 @@ if [[ "${ARCH}" != "aarch64" ]]; then
   echo "ERROR: This package requires aarch64/ARM64. Current architecture: ${ARCH}" >&2
   exit 1
 fi
-GLIBC_VERSION="$(ldd --version | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | tail -n 1)"
+GLIBC_LINE="$(ldd --version 2>&1 | sed -n '1p')"
+GLIBC_VERSION="$(printf '%s\n' "${GLIBC_LINE}" | grep -oE '[0-9]+\.[0-9]+' | tail -n 1)"
 if [[ -z "${GLIBC_VERSION}" ]]; then
   echo "ERROR: Could not determine glibc version." >&2
   exit 1
 fi
-if [[ "$(printf '%s\n' '2.28' "${GLIBC_VERSION}" | sort -V | head -n 1)" != "2.28" ]]; then
+if [[ "$(printf '%s\n' '2.28' "${GLIBC_VERSION}" | sort -V | sed -n '1p')" != "2.28" ]]; then
   echo "ERROR: glibc ${GLIBC_VERSION} is older than required baseline 2.28." >&2
   exit 1
 fi
