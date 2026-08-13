@@ -194,7 +194,7 @@ jobs:
               set -euxo pipefail
               dnf install -y ca-certificates curl xz tar gzip findutils binutils file gcc gcc-c++ make python3 git
               update-ca-trust
-              ldd --version | head -n 1
+              ldd --version 2>&1 | sed -n "1p"
               test "$(uname -m)" = "aarch64"
               bash ./scripts/build-node-red-offline-linux-arm64.sh
             '
@@ -238,7 +238,6 @@ jobs:
           MAX_VERSION="${MAX_GLIBC#GLIBC_}"
           if [[ "$(printf '%s\n' '2.28' "$MAX_VERSION" | sort -V | tail -n 1)" != "2.28" ]]; then
             echo "Bundled files require $MAX_GLIBC, newer than Kylin V10 SP3 glibc 2.28." >&2
-            grep -RIl . "$PACKAGE" >/dev/null 2>&1 || true
             exit 1
           fi
 
