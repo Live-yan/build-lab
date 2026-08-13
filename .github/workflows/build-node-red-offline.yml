@@ -192,10 +192,13 @@ jobs:
             almalinux:8 \
             bash -lc '
               set -euxo pipefail
-              dnf install -y ca-certificates curl xz tar gzip findutils binutils file gcc gcc-c++ make python3 git
+              dnf install -y ca-certificates curl xz tar gzip findutils binutils file gcc gcc-c++ make python39 python39-devel git
               update-ca-trust
               ldd --version 2>&1 | sed -n "1p"
               test "$(uname -m)" = "aarch64"
+              python3.9 --version
+              export PYTHON=/usr/bin/python3.9
+              export npm_config_python=/usr/bin/python3.9
               bash ./scripts/build-node-red-offline-linux-arm64.sh
             '
 
