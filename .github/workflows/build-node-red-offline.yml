@@ -1,0 +1,351 @@
+name: Build Node-RED Offline Portable Packages
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-node-red-offline.yml"
+      - "scripts/build-node-red-offline-linux-arm64.sh"
+      - "scripts/build-node-red-offline-windows.ps1"
+      - "NODE-RED-OFFLINE.md"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/build-node-red-offline.yml"
+      - "scripts/build-node-red-offline-linux-arm64.sh"
+      - "scripts/build-node-red-offline-windows.ps1"
+      - "NODE-RED-OFFLINE.md"
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24.18.1"
+  NODE_RED_VERSION: "5.0.1"
+  MODBUS_VERSION: "5.60.1"
+  OPCUA_VERSION: "0.2.354"
+  KAFKA_VERSION: "6.1.1"
+  KAFKAJS_VERSION: "2.2.4"
+
+jobs:
+  windows-x64:
+    name: Build and verify Windows x64 portable package
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Windows portable offline package
+        shell: pwsh
+        run: .\scripts\build-node-red-offline-windows.ps1
+
+      - name: Verify bundled runtime and protocol modules
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = (Resolve-Path ".\dist-node-red-windows\NodeRED-Windows-x64").Path
+          & "$package\runtime\node.exe" --version
+          & "$package\runtime\npm.cmd" --version
+
+          $required = @(
+            "$package\app\node_modules\node-red\red.js",
+            "$package\data\node_modules\node-red-contrib-modbus\package.json",
+            "$package\data\node_modules\node-red-contrib-opcua\package.json",
+            "$package\data\node_modules\@oriolrius\node-red-contrib-kafka\package.json"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path $path)) {
+              throw "Required offline component is missing: $path"
+            }
+          }
+
+      - name: Smoke test Node-RED on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $package = (Resolve-Path ".\dist-node-red-windows\NodeRED-Windows-x64").Path
+          $node = Join-Path $package "runtime\node.exe"
+          $red = Join-Path $package "app\node_modules\node-red\red.js"
+          $userDir = Join-Path $package "data"
+          $stdout = Join-Path $package "logs\smoke-stdout.log"
+          $stderr = Join-Path $package "logs\smoke-stderr.log"
+
+          $env:NODE_RED_HOST = "127.0.0.1"
+          $env:NODE_RED_PORT = "18880"
+
+          $process = Start-Process `
+            -FilePath $node `
+            -ArgumentList @($red, "--userDir", $userDir) `
+            -PassThru `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr
+
+          $healthy = $false
+          try {
+            for ($i = 0; $i -lt 60; $i++) {
+              Start-Sleep -Seconds 2
+              if ($process.HasExited) {
+                Get-Content $stdout -ErrorAction SilentlyContinue
+                Get-Content $stderr -ErrorAction SilentlyContinue
+                throw "Node-RED exited before becoming healthy. Exit code: $($process.ExitCode)"
+              }
+              try {
+                $response = Invoke-WebRequest -Uri "http://127.0.0.1:18880/" -UseBasicParsing -TimeoutSec 5
+                if ($response.StatusCode -eq 200 -and $response.Content -match "Node-RED") {
+                  $healthy = $true
+                  break
+                }
+              }
+              catch {
+                Write-Host "Waiting for Node-RED..."
+              }
+            }
+            if (-not $healthy) {
+              throw "Node-RED did not become healthy within 120 seconds."
+            }
+
+            $logs = ((Get-Content $stdout -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue))
+            if ($logs -match "Error loading node module|Failed to register node type") {
+              throw "Node-RED reported a protocol-node loading failure.`n$logs"
+            }
+            Write-Host "Node-RED Windows smoke test: PASS"
+          }
+          finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+
+      - name: Remove smoke logs from final Windows package
+        if: success()
+        shell: pwsh
+        run: |
+          Remove-Item .\dist-node-red-windows\NodeRED-Windows-x64\logs\smoke-stdout.log -Force -ErrorAction SilentlyContinue
+          Remove-Item .\dist-node-red-windows\NodeRED-Windows-x64\logs\smoke-stderr.log -Force -ErrorAction SilentlyContinue
+
+      - name: Recreate Windows ZIP after verification
+        if: success()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dist = (Resolve-Path ".\dist-node-red-windows").Path
+          $package = Join-Path $dist "NodeRED-Windows-x64"
+          $zip = Join-Path $dist "node-red-offline-windows-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "$package\*" -DestinationPath $zip -CompressionLevel Optimal -Force
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          Set-Content -Path "$zip.sha256" -Value "$hash  node-red-offline-windows-x64.zip" -Encoding ASCII
+          Get-Content "$zip.sha256"
+
+      - name: Upload Windows smoke-test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-red-windows-smoke-test-logs
+          path: dist-node-red-windows/NodeRED-Windows-x64/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Windows offline portable package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-red-offline-windows-x64
+          path: |
+            dist-node-red-windows/node-red-offline-windows-x64.zip
+            dist-node-red-windows/node-red-offline-windows-x64.zip.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  kylin-arm64:
+    name: Build and verify Kylin V10 SP3 ARM64 portable package
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify native ARM64 runner
+        shell: bash
+        run: |
+          set -euxo pipefail
+          uname -a
+          test "$(uname -m)" = "aarch64"
+          docker --version
+
+      - name: Build package inside glibc 2.28 ARM64 environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+          docker run --rm \
+            -e NODE_VERSION \
+            -e NODE_RED_VERSION \
+            -e MODBUS_VERSION \
+            -e OPCUA_VERSION \
+            -e KAFKAJS_VERSION \
+            -v "$PWD:/work" \
+            -w /work \
+            almalinux:8 \
+            bash -lc '
+              set -euxo pipefail
+              dnf install -y ca-certificates curl xz tar gzip findutils binutils file gcc gcc-c++ make python39 python39-devel git
+              update-ca-trust
+              ldd --version 2>&1 | sed -n "1p"
+              test "$(uname -m)" = "aarch64"
+              python3.9 --version
+              export PYTHON=/usr/bin/python3.9
+              export npm_config_python=/usr/bin/python3.9
+              bash ./scripts/build-node-red-offline-linux-arm64.sh
+            '
+          sudo chown -R "$(id -u):$(id -g)" ./dist-node-red-linux-arm64
+
+      - name: Verify ARM64 package contents
+        shell: bash
+        run: |
+          set -euxo pipefail
+          PACKAGE=./dist-node-red-linux-arm64/NodeRED-Kylin-V10SP3-ARM64
+          test -x "$PACKAGE/runtime/bin/node"
+          test -f "$PACKAGE/app/node_modules/node-red/red.js"
+          test -f "$PACKAGE/data/node_modules/node-red-contrib-modbus/package.json"
+          test -f "$PACKAGE/data/node_modules/node-red-contrib-opcua/package.json"
+          test -f "$PACKAGE/data/node_modules/kafkajs/package.json"
+          test -f "$PACKAGE/data/node_modules/node-red-contrib-kafkajs-portable/package.json"
+          test -f "$PACKAGE/data/node_modules/node-red-contrib-kafkajs-portable/kafka.js"
+          test -f "$PACKAGE/data/node_modules/node-red-contrib-kafkajs-portable/kafka.html"
+          file "$PACKAGE/runtime/bin/node" | grep -Eiq 'aarch64|ARM aarch64'
+          "$PACKAGE/runtime/bin/node" --version
+          "$PACKAGE/runtime/bin/node" -e "require('./dist-node-red-linux-arm64/NodeRED-Kylin-V10SP3-ARM64/data/node_modules/kafkajs'); console.log('KafkaJS require: PASS')"
+          cat "$PACKAGE/VERSION.txt"
+
+      - name: Check every bundled ELF against Kylin glibc 2.28 baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y binutils file
+          PACKAGE=./dist-node-red-linux-arm64/NodeRED-Kylin-V10SP3-ARM64
+          REPORT="$PACKAGE/COMPATIBILITY.txt"
+          VERSIONS_FILE="$(mktemp)"
+
+          while IFS= read -r -d '' f; do
+            if file "$f" | grep -q 'ELF'; then
+              readelf --version-info "$f" 2>/dev/null | grep -oE 'GLIBC_[0-9]+\.[0-9]+' >> "$VERSIONS_FILE" || true
+            fi
+          done < <(find "$PACKAGE" -type f -print0)
+
+          sort -Vu "$VERSIONS_FILE" -o "$VERSIONS_FILE"
+          MAX_GLIBC="$(tail -n 1 "$VERSIONS_FILE" || true)"
+          if [[ -z "$MAX_GLIBC" ]]; then
+            echo "Could not determine bundled ELF GLIBC requirements." >&2
+            exit 1
+          fi
+          MAX_VERSION="${MAX_GLIBC#GLIBC_}"
+          if [[ "$(printf '%s\n' '2.28' "$MAX_VERSION" | sort -V | tail -n 1)" != "2.28" ]]; then
+            echo "Bundled files require $MAX_GLIBC, newer than Kylin V10 SP3 glibc 2.28." >&2
+            exit 1
+          fi
+
+          {
+            echo "Target: Galaxy Kylin Advanced Server V10 SP3 aarch64"
+            echo "Target glibc baseline: 2.28"
+            echo "Maximum bundled ELF GLIBC requirement: $MAX_GLIBC"
+            echo "Result: PASS"
+            echo
+            echo "Detected symbol versions:"
+            cat "$VERSIONS_FILE"
+          } > "$REPORT"
+          cat "$REPORT"
+          rm -f "$VERSIONS_FILE"
+
+      - name: Smoke test Node-RED on native ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          PACKAGE="$(realpath ./dist-node-red-linux-arm64/NodeRED-Kylin-V10SP3-ARM64)"
+          STDOUT="$PACKAGE/logs/smoke-stdout.log"
+          STDERR="$PACKAGE/logs/smoke-stderr.log"
+          export NODE_RED_HOST=127.0.0.1
+          export NODE_RED_PORT=18880
+
+          "$PACKAGE/start-node-red.sh" >"$STDOUT" 2>"$STDERR" &
+          PID=$!
+          cleanup() {
+            kill "$PID" 2>/dev/null || true
+            wait "$PID" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          HEALTHY=false
+          for _ in $(seq 1 60); do
+            sleep 2
+            if ! kill -0 "$PID" 2>/dev/null; then
+              echo "Node-RED exited before becoming healthy." >&2
+              tail -n 200 "$STDOUT" >&2 || true
+              tail -n 200 "$STDERR" >&2 || true
+              exit 1
+            fi
+            if curl -fsS --max-time 5 http://127.0.0.1:18880/ | grep -q 'Node-RED'; then
+              HEALTHY=true
+              break
+            fi
+          done
+          if [[ "$HEALTHY" != true ]]; then
+            echo "Node-RED did not become healthy within 120 seconds." >&2
+            tail -n 200 "$STDOUT" >&2 || true
+            tail -n 200 "$STDERR" >&2 || true
+            exit 1
+          fi
+
+          if grep -Eqi 'Error loading node module|Failed to register node type|Cannot find module' "$STDOUT" "$STDERR"; then
+            echo "Node-RED reported a protocol-node loading failure." >&2
+            cat "$STDOUT" >&2 || true
+            cat "$STDERR" >&2 || true
+            exit 1
+          fi
+          grep -q 'node-red-contrib-kafkajs-portable' "$PACKAGE/data/.config.nodes.json" || {
+            echo "Bundled KafkaJS Node-RED nodes were not registered." >&2
+            cat "$PACKAGE/data/.config.nodes.json" >&2 || true
+            exit 1
+          }
+          echo "Node-RED Kylin ARM64 smoke test: PASS"
+
+      - name: Remove ARM64 smoke-test logs
+        if: success()
+        shell: bash
+        run: rm -f ./dist-node-red-linux-arm64/NodeRED-Kylin-V10SP3-ARM64/logs/smoke-stdout.log ./dist-node-red-linux-arm64/NodeRED-Kylin-V10SP3-ARM64/logs/smoke-stderr.log
+
+      - name: Create portable tar.gz and checksum
+        if: success()
+        shell: bash
+        run: |
+          set -euxo pipefail
+          DIST=./dist-node-red-linux-arm64
+          tar -C "$DIST" -czf "$DIST/node-red-offline-kylin-v10sp3-arm64.tar.gz" NodeRED-Kylin-V10SP3-ARM64
+          sha256sum "$DIST/node-red-offline-kylin-v10sp3-arm64.tar.gz" > "$DIST/node-red-offline-kylin-v10sp3-arm64.tar.gz.sha256"
+          cat "$DIST/node-red-offline-kylin-v10sp3-arm64.tar.gz.sha256"
+
+      - name: Upload ARM64 smoke-test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-red-kylin-arm64-smoke-test-logs
+          path: dist-node-red-linux-arm64/NodeRED-Kylin-V10SP3-ARM64/logs
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Kylin ARM64 offline portable package
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-red-offline-kylin-v10sp3-arm64
+          path: |
+            dist-node-red-linux-arm64/node-red-offline-kylin-v10sp3-arm64.tar.gz
+            dist-node-red-linux-arm64/node-red-offline-kylin-v10sp3-arm64.tar.gz.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
