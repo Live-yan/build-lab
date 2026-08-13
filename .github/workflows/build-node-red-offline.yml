@@ -26,6 +26,7 @@ env:
   MODBUS_VERSION: "5.60.1"
   OPCUA_VERSION: "0.2.354"
   KAFKA_VERSION: "6.1.1"
+  KAFKAJS_VERSION: "2.2.4"
 
 jobs:
   windows-x64:
@@ -186,7 +187,7 @@ jobs:
             -e NODE_RED_VERSION \
             -e MODBUS_VERSION \
             -e OPCUA_VERSION \
-            -e KAFKA_VERSION \
+            -e KAFKAJS_VERSION \
             -v "$PWD:/work" \
             -w /work \
             almalinux:8 \
@@ -211,9 +212,13 @@ jobs:
           test -f "$PACKAGE/app/node_modules/node-red/red.js"
           test -f "$PACKAGE/data/node_modules/node-red-contrib-modbus/package.json"
           test -f "$PACKAGE/data/node_modules/node-red-contrib-opcua/package.json"
-          test -f "$PACKAGE/data/node_modules/@oriolrius/node-red-contrib-kafka/package.json"
+          test -f "$PACKAGE/data/node_modules/kafkajs/package.json"
+          test -f "$PACKAGE/data/node_modules/node-red-contrib-kafkajs-portable/package.json"
+          test -f "$PACKAGE/data/node_modules/node-red-contrib-kafkajs-portable/kafka.js"
+          test -f "$PACKAGE/data/node_modules/node-red-contrib-kafkajs-portable/kafka.html"
           file "$PACKAGE/runtime/bin/node" | grep -Eiq 'aarch64|ARM aarch64'
           "$PACKAGE/runtime/bin/node" --version
+          "$PACKAGE/runtime/bin/node" -e "require('./dist-node-red-linux-arm64/NodeRED-Kylin-V10SP3-ARM64/data/node_modules/kafkajs'); console.log('KafkaJS require: PASS')"
           cat "$PACKAGE/VERSION.txt"
 
       - name: Check every bundled ELF against Kylin glibc 2.28 baseline
@@ -295,12 +300,17 @@ jobs:
             exit 1
           fi
 
-          if grep -Eqi 'Error loading node module|Failed to register node type' "$STDOUT" "$STDERR"; then
+          if grep -Eqi 'Error loading node module|Failed to register node type|Cannot find module' "$STDOUT" "$STDERR"; then
             echo "Node-RED reported a protocol-node loading failure." >&2
             cat "$STDOUT" >&2 || true
             cat "$STDERR" >&2 || true
             exit 1
           fi
+          grep -q 'node-red-contrib-kafkajs-portable' "$PACKAGE/data/.config.nodes.json" || {
+            echo "Bundled KafkaJS Node-RED nodes were not registered." >&2
+            cat "$PACKAGE/data/.config.nodes.json" >&2 || true
+            exit 1
+          }
           echo "Node-RED Kylin ARM64 smoke test: PASS"
 
       - name: Remove ARM64 smoke-test logs
