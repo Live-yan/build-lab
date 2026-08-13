@@ -202,6 +202,7 @@ jobs:
               export npm_config_python=/usr/bin/python3.9
               bash ./scripts/build-node-red-offline-linux-arm64.sh
             '
+          sudo chown -R "$(id -u):$(id -g)" ./dist-node-red-linux-arm64
 
       - name: Verify ARM64 package contents
         shell: bash
