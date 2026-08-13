@@ -34,6 +34,33 @@ export PATH="${PACKAGE_DIR}/runtime/bin:${PATH}"
 node --version
 npm --version
 
+# Node.js 24's headers request -std=gnu++20 for native addons. AlmaLinux 8's
+# GCC 8 uses the older spelling -std=gnu++2a for the same draft language mode.
+# Keep the GCC 8 / glibc 2.28 ABI baseline and translate only that flag instead
+# of compiling the addon with a newer distro/toolchain that could require newer
+# GLIBC/GLIBCXX symbols on the offline Kylin target.
+if command -v g++ >/dev/null 2>&1; then
+  GCC_MAJOR="$(g++ -dumpfullversion -dumpversion | cut -d. -f1)"
+  if [[ "${GCC_MAJOR}" =~ ^[0-9]+$ ]] && (( GCC_MAJOR < 10 )); then
+    CXX_WRAPPER="${WORK_DIR}/gxx-node24-compat"
+    cat > "${CXX_WRAPPER}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+args=()
+for arg in "$@"; do
+  if [[ "${arg}" == "-std=gnu++20" ]]; then
+    arg="-std=gnu++2a"
+  fi
+  args+=("${arg}")
+done
+exec /usr/bin/g++ "${args[@]}"
+EOF
+    chmod +x "${CXX_WRAPPER}"
+    export CXX="${CXX_WRAPPER}"
+    echo "Using GCC ${GCC_MAJOR} compatibility wrapper for Node.js 24 native addons: ${CXX}"
+  fi
+fi
+
 cat > "${PACKAGE_DIR}/app/package.json" <<EOF
 {
   "name": "node-red-offline-runtime",
