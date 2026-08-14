@@ -7,6 +7,12 @@ on:
     paths:
       - 'Dhua/**'
       - '.github/workflows/dahua-sdk-diagnostics.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'Dhua/**'
+      - '.github/workflows/dahua-sdk-diagnostics.yml'
   workflow_dispatch:
 
 permissions:
