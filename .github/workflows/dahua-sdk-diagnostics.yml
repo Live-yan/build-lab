@@ -51,7 +51,7 @@ jobs:
           SDK="$RUNNER_TEMP/dahua-sdk"
           STAGE="$GITHUB_WORKSPACE/dist/${{ matrix.package }}"
           mkdir -p "$STAGE/lib"
-          g++ -std=c++17 -O2 -Wall -Wextra \
+          g++ -std=c++11 -O2 -Wall -Wextra \
             -I"$SDK/Include/Common" \
             "$GITHUB_WORKSPACE/Dhua/examples/c/dahua_download.cpp" \
             -L"$SDK/Bin" -Wl,-rpath,'$ORIGIN/lib' -Wl,-rpath-link,"$SDK/Bin" \
@@ -60,7 +60,9 @@ jobs:
           cp -a "$SDK"/Bin/*.so* "$STAGE/lib/"
           cp "$GITHUB_WORKSPACE/Dhua/examples/c/dahua_download.cpp" "$STAGE/"
           cp "$GITHUB_WORKSPACE/Dhua/examples/c/run.sh" "$STAGE/"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/config.example.yaml" "$STAGE/"
           cp "$GITHUB_WORKSPACE/Dhua/examples/README.md" "$STAGE/README.md"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/SDK_GUIDE_CN.md" "$STAGE/SDK_GUIDE_CN.md"
           chmod +x "$STAGE/dahua_download" "$STAGE/run.sh"
           file "$STAGE/dahua_download"
           ldd "$STAGE/dahua_download"
@@ -70,6 +72,12 @@ jobs:
         run: |
           set -euxo pipefail
           "dist/${{ matrix.package }}/run.sh" --sdk-smoke
+
+      - name: Validate config parser and generated MP4 paths
+        shell: bash
+        run: |
+          set -euxo pipefail
+          "dist/${{ matrix.package }}/run.sh" --config-check "$GITHUB_WORKSPACE/Dhua/examples/config.example.yaml"
 
       - name: Optional real device login/download test
         shell: bash
@@ -93,11 +101,11 @@ jobs:
           EXE="dist/${{ matrix.package }}/run.sh"
           "$EXE" --login-test "$DAHUA_HOST" "$PORT" "$DAHUA_USERNAME" "$DAHUA_PASSWORD"
           if [[ -n "${DAHUA_START:-}" && -n "${DAHUA_END:-}" ]]; then
-            OUT="$RUNNER_TEMP/${{ matrix.package }}-download.dav"
+            OUT="$RUNNER_TEMP/${{ matrix.package }}-download.mp4"
             "$EXE" "$DAHUA_HOST" "$PORT" "$DAHUA_USERNAME" "$DAHUA_PASSWORD" \
               "$CHANNEL" "$DAHUA_START" "$DAHUA_END" "$OUT"
             test -s "$OUT"
-            echo "Real recording download test OK: $(stat -c '%s bytes' "$OUT")"
+            echo "Real MP4 recording download test OK: $(stat -c '%s bytes' "$OUT")"
           else
             echo 'Login/logout passed; recording download skipped because DAHUA_START/DAHUA_END are not configured.'
           fi
@@ -120,7 +128,7 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Compile JAR SDK example
+      - name: Compile JAR SDK example for Java 8+
         shell: bash
         run: |
           set -euxo pipefail
@@ -132,16 +140,19 @@ jobs:
           test -f "$RES/jna.jar"
           test -f "$RES/netsdk-api-linuxARM-1.0.jar"
           test -f "$RES/netsdk-dynamic-lib-linuxARM-1.0.jar"
-          javac -encoding UTF-8 -cp "$RES/*" -d "$CLASSES" \
+          javac --release 8 -encoding UTF-8 -cp "$RES/*" -d "$CLASSES" \
             "$GITHUB_WORKSPACE/Dhua/examples/jar/DahuaDownloadExample.java"
           jar --create --file "$STAGE/dahua-download-example.jar" \
             --main-class DahuaDownloadExample -C "$CLASSES" .
+          javap -verbose "$CLASSES/DahuaDownloadExample.class" | grep 'major version: 52'
           cp "$RES/jna.jar" "$STAGE/lib/"
           cp "$RES/netsdk-api-linuxARM-1.0.jar" "$STAGE/lib/"
           cp "$RES/netsdk-dynamic-lib-linuxARM-1.0.jar" "$STAGE/lib/"
           cp "$GITHUB_WORKSPACE/Dhua/examples/jar/DahuaDownloadExample.java" "$STAGE/"
           cp "$GITHUB_WORKSPACE/Dhua/examples/jar/run.sh" "$STAGE/"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/config.example.yaml" "$STAGE/"
           cp "$GITHUB_WORKSPACE/Dhua/examples/README.md" "$STAGE/README.md"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/SDK_GUIDE_CN.md" "$STAGE/SDK_GUIDE_CN.md"
           chmod +x "$STAGE/run.sh"
           jar tf "$STAGE/dahua-download-example.jar" | grep 'DahuaDownloadExample.class'
 
@@ -151,6 +162,12 @@ jobs:
           set -euxo pipefail
           uname -m
           "dist/jar-linuxarm/run.sh" --sdk-smoke
+
+      - name: Validate config parser and generated MP4 paths
+        shell: bash
+        run: |
+          set -euxo pipefail
+          "dist/jar-linuxarm/run.sh" --config-check "$GITHUB_WORKSPACE/Dhua/examples/config.example.yaml"
 
       - name: Optional real device login/download test
         shell: bash
@@ -174,11 +191,11 @@ jobs:
           EXE="dist/jar-linuxarm/run.sh"
           "$EXE" --login-test "$DAHUA_HOST" "$PORT" "$DAHUA_USERNAME" "$DAHUA_PASSWORD"
           if [[ -n "${DAHUA_START:-}" && -n "${DAHUA_END:-}" ]]; then
-            OUT="$RUNNER_TEMP/jar-linuxarm-download.dav"
+            OUT="$RUNNER_TEMP/jar-linuxarm-download.mp4"
             "$EXE" "$DAHUA_HOST" "$PORT" "$DAHUA_USERNAME" "$DAHUA_PASSWORD" \
               "$CHANNEL" "$DAHUA_START" "$DAHUA_END" "$OUT"
             test -s "$OUT"
-            echo "Real recording download test OK: $(stat -c '%s bytes' "$OUT")"
+            echo "Real MP4 recording download test OK: $(stat -c '%s bytes' "$OUT")"
           else
             echo 'Login/logout passed; recording download skipped because DAHUA_START/DAHUA_END are not configured.'
           fi
@@ -217,21 +234,23 @@ jobs:
         run: |
           set -euxo pipefail
           cp Dhua/examples/README.md bundle/README.md
+          cp Dhua/examples/SDK_GUIDE_CN.md bundle/SDK_GUIDE_CN.md
+          cp Dhua/examples/config.example.yaml bundle/config.example.yaml
           chmod +x bundle/c-linux64/run.sh bundle/c-linux64/dahua_download
           chmod +x bundle/c-aarch64/run.sh bundle/c-aarch64/dahua_download
           chmod +x bundle/jar-linuxarm/run.sh
-          tar -czf dahua-sdk-download-examples.tar.gz -C bundle .
-          (cd bundle && zip -qr ../dahua-sdk-download-examples.zip .)
+          tar -czf dahua-sdk-mp4-download-examples.tar.gz -C bundle .
+          (cd bundle && zip -qr ../dahua-sdk-mp4-download-examples.zip .)
           find bundle -maxdepth 3 -type f -printf '%p %k KB\n' | sort
-          sha256sum dahua-sdk-download-examples.tar.gz dahua-sdk-download-examples.zip > SHA256SUMS
+          sha256sum dahua-sdk-mp4-download-examples.tar.gz dahua-sdk-mp4-download-examples.zip > SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dahua-sdk-download-examples
+          name: dahua-sdk-mp4-download-examples
           path: |
             bundle
-            dahua-sdk-download-examples.tar.gz
-            dahua-sdk-download-examples.zip
+            dahua-sdk-mp4-download-examples.tar.gz
+            dahua-sdk-mp4-download-examples.zip
             SHA256SUMS
           if-no-files-found: error
           retention-days: 14
