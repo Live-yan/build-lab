@@ -27,8 +27,13 @@ jobs:
           tar -xf "$SDK" -C /tmp/dahua-c
           H=/tmp/dahua-c/Include/Common/dhnetsdk.h
           grep -a -n -B12 -A24 'CLIENT_DownloadByTimeEx2' "$H" || true
+          grep -a -n -B12 -A24 'CLIENT_PlayBackByDataType' "$H" || true
+          grep -a -n -B12 -A24 'NET_IN_PLAYBACK_BY_DATA_TYPE' "$H" || true
+          sed -n '82940,83180p' "$H" || true
+          echo '=== exports ==='
+          nm -D "$RUNNER_TEMP/none" 2>/dev/null || true
+          nm -D /tmp/dahua-c/Bin/libdhnetsdk.so | grep -E 'DownloadByTimeEx2|DownloadByTimeEx|PlayBackByDataType|StopPlayBack|StopDownload' || true
           grep -a -n -B12 -A24 'EM_REAL_DATA_TYPE_MP4' "$H" || true
-          grep -a -n -B12 -A24 'EM_REAL_DATA_TYPE' "$H" | head -160 || true
           grep -a -n -B8 -A16 'CLIENT_DownloadByTimeEx(' "$H" || true
 
   inspect-jar:
