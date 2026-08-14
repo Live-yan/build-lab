@@ -22,81 +22,61 @@ jobs:
   inspect-c-linux64:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
-      - name: Inspect and extract C Linux64 SDK
+      - name: Inspect exact C API signatures
         shell: bash
         run: |
           set -euxo pipefail
           SDK='Dhua/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515'
-          git lfs ls-files
-          ls -lh "$SDK"
-          file "$SDK"
           mkdir -p /tmp/dahua-c64
-          7z x -y "$SDK" -o/tmp/dahua-c64 >/tmp/7z-c64.log 2>&1 || {
-            cat /tmp/7z-c64.log
-            tar -xf "$SDK" -C /tmp/dahua-c64
-          }
-          echo '=== top files ==='
-          find /tmp/dahua-c64 -maxdepth 4 -type f | head -200
-          echo '=== likely headers/samples ==='
-          find /tmp/dahua-c64 -type f \( -iname '*.h' -o -iname '*.c' -o -iname '*.cpp' -o -iname 'Makefile' \) | head -300
-          echo '=== login/download symbols ==='
-          grep -RInaE 'CLIENT_(Login|Logout|Download|QueryRecord)|DownloadByTime|PlayBack' /tmp/dahua-c64 --include='*.h' --include='*.c' --include='*.cpp' 2>/dev/null | head -300 || true
+          tar -xf "$SDK" -C /tmp/dahua-c64
+          HEADER=/tmp/dahua-c64/Include/Common/dhnetsdk.h
+          echo '=== callback typedefs ==='
+          grep -n -B3 -A8 -E 'fTimeDownLoadPosCallBack|fDataCallBack' "$HEADER" | head -160 || true
+          echo '=== download status/stop APIs ==='
+          grep -n -B2 -A3 -E 'CLIENT_(GetDownloadPos|StopDownload|DownloadByTimeEx)' "$HEADER" | head -160 || true
+          echo '=== official playback demo callback/download code ==='
+          sed -n '1,90p;585,635p' /tmp/dahua-c64/Demo/03.PlayBack/dialog.cpp
 
   inspect-c-aarch64:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           lfs: true
-      - name: Inspect and extract C aarch64 SDK
+      - name: Verify aarch64 C SDK API and libraries
         shell: bash
         run: |
           set -euxo pipefail
           SDK='Dhua/设备网络SDK_C_aarch64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_aarch64_IS_V3.061.0000000.0.R.260515'
-          git lfs ls-files
-          ls -lh "$SDK"
-          file "$SDK"
           mkdir -p /tmp/dahua-carm
-          7z x -y "$SDK" -o/tmp/dahua-carm >/tmp/7z-carm.log 2>&1 || {
-            cat /tmp/7z-carm.log
-            tar -xf "$SDK" -C /tmp/dahua-carm
-          }
-          echo '=== top files ==='
-          find /tmp/dahua-carm -maxdepth 4 -type f | head -200
-          echo '=== likely headers/samples ==='
-          find /tmp/dahua-carm -type f \( -iname '*.h' -o -iname '*.c' -o -iname '*.cpp' -o -iname 'Makefile' \) | head -300
-          echo '=== login/download symbols ==='
-          grep -RInaE 'CLIENT_(Login|Logout|Download|QueryRecord)|DownloadByTime|PlayBack' /tmp/dahua-carm --include='*.h' --include='*.c' --include='*.cpp' 2>/dev/null | head -300 || true
+          tar -xf "$SDK" -C /tmp/dahua-carm
+          file /tmp/dahua-carm/Bin/libdhnetsdk.so
+          grep -n -E 'CLIENT_LoginWithHighLevelSecurity|CLIENT_Logout\(|CLIENT_DownloadByTimeEx\(' /tmp/dahua-carm/Include/Common/dhnetsdk.h | head -30
 
   inspect-jar-arm:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - name: Inspect JAR SDK API and sources
+      - name: Inspect exact Java callback signatures
         shell: bash
         run: |
           set -euxo pipefail
           ROOT='Dhua/设备网络SDK_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511/General_NetSDK_ChnEng_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511'
-          API="$ROOT/out/production/netsdk-demo/netsdk-api-linuxARM-1.0.jar"
-          DYN="$ROOT/out/production/netsdk-demo/netsdk-dynamic-lib-linuxARM-1.0.jar"
-          JNA="$ROOT/out/production/netsdk-demo/jna.jar"
+          API="$ROOT/src/main/resources/netsdk-api-linuxARM-1.0.jar"
+          DYN="$ROOT/src/main/resources/netsdk-dynamic-lib-linuxARM-1.0.jar"
+          JNA="$ROOT/src/main/resources/jna.jar"
           SRC="$ROOT/source/netsdk-api-linuxARM-1.0-sources.jar"
-          ls -lh "$API" "$DYN" "$JNA" "$SRC"
-          echo '=== source classes related to login / record / download / playback ==='
-          jar tf "$SRC" | grep -Ei '(BaseModule|login|logout|download|record|playback|playback)' | head -300 || true
-          echo '=== NetSDKLib native methods ==='
-          javap -classpath "$API:$JNA" com.netsdk.lib.NetSDKLib | grep -Ei 'CLIENT_(Login|Logout|Download|QueryRecord)|DownloadByTime|PlayBack' | head -300 || true
-          echo '=== candidate module source ==='
-          while IFS= read -r entry; do
-            echo "----- $entry -----"
-            unzip -p "$SRC" "$entry" | sed -n '1,260p'
-          done < <(jar tf "$SRC" | grep -Ei '^com/netsdk/module/.*(Base|Record|Download|Play).*\.java$' | head -20)
-          echo '=== native libraries bundled in dynamic jar ==='
-          jar tf "$DYN" | grep -E '\.(so|dll|dylib)$' | head -200 || true
+          echo '=== NetSDKLib relevant source ==='
+          unzip -p "$SRC" com/netsdk/lib/NetSDKLib.java > /tmp/NetSDKLib.java
+          grep -n -B4 -A12 -E 'interface fTimeDownLoadPosCallBack|interface fDataCallBack|CLIENT_DownloadByTimeEx\(|CLIENT_StopDownload\(|CLIENT_GetDownloadPos\(' /tmp/NetSDKLib.java | head -260 || true
+          echo '=== binary signatures ==='
+          javap -classpath "$API:$JNA" com.netsdk.lib.NetSDKLib | grep -E 'CLIENT_(DownloadByTimeEx|StopDownload|GetDownloadPos|LoginWithHighLevelSecurity|Logout)' || true
+          echo '=== native bundle ==='
+          jar tf "$DYN" | grep -E 'linuxARM/.*\.so$'
