@@ -1,0 +1,53 @@
+name: Dahua SDK MP4 API contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Dhua/**'
+      - '.github/workflows/dahua-sdk-mp4-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-c:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+      - name: Inspect C download API
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK='Dhua/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515'
+          mkdir -p /tmp/dahua-c
+          tar -xf "$SDK" -C /tmp/dahua-c
+          H=/tmp/dahua-c/Include/Common/dhnetsdk.h
+          grep -a -n -B12 -A24 'CLIENT_DownloadByTimeEx2' "$H" || true
+          grep -a -n -B12 -A24 'EM_REAL_DATA_TYPE_MP4' "$H" || true
+          grep -a -n -B12 -A24 'EM_REAL_DATA_TYPE' "$H" | head -160 || true
+          grep -a -n -B8 -A16 'CLIENT_DownloadByTimeEx(' "$H" || true
+
+  inspect-jar:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Inspect Java download API
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ROOT='Dhua/设备网络SDK_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511/General_NetSDK_ChnEng_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511'
+          SRC="$ROOT/source/netsdk-api-linuxARM-1.0-sources.jar"
+          API="$ROOT/src/main/resources/netsdk-api-linuxARM-1.0.jar"
+          JNA="$ROOT/src/main/resources/jna.jar"
+          unzip -p "$SRC" com/netsdk/lib/NetSDKLib.java > /tmp/NetSDKLib.java
+          grep -n -B16 -A32 'CLIENT_DownloadByTimeEx2' /tmp/NetSDKLib.java || true
+          grep -n -B12 -A24 'EM_REAL_DATA_TYPE_MP4' /tmp/NetSDKLib.java || true
+          javap -classpath "$API:$JNA" com.netsdk.lib.NetSDKLib | grep -E 'CLIENT_DownloadByTimeEx2|CLIENT_DownloadByTimeEx' || true
