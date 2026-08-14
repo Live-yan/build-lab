@@ -1,0 +1,34 @@
+{
+  "sessions": {
+    "omx-1786718353827-k6ebd5": {
+      "ordinary_no_progress_guard": {
+        "fingerprint": "ordinary|omx-exec-ok",
+        "first_seen_at": "2026-08-14T14:39:39.671Z",
+        "last_seen_at": "2026-08-14T14:39:39.671Z",
+        "repeat_count": 1,
+        "last_turn_id": "01a000b6-9134-7362-9a5f-a00f45436348",
+        "last_thread_id": null
+      }
+    },
+    "01a000a5-f7db-7ef3-bb0d-9e1304215a1c": {
+      "ordinary_no_progress_guard": {
+        "fingerprint": "ordinary|已完成清理，并保留 omx。 按两份官方 readme 的安装路径检查后，已删除： - superpowers：codex 源码、技能链接、opencode 插件/技能、旧缓存。 - oh-my-openagent/oh-my-opencode：配置、备份、插件注册、本地数据、nvm 旧版本、npx 临时缓存及全局 npm 包。 - 修改了 [opencode.jsonc](c:/users/depths/.config/opencode/opencode.jsonc:1)，仅移除 omo，保留 `ponytail.mjs` 和 opencode mcp 配置。 保留确认： - `oh-my-codex@0.20.5` - omx 插件缓存、`config.toml`、`hooks.json`、`agents.md` - `opencode-ai@1.18.13` - `oh-my-claude-sisyphus` 验证结果： - 目标路径及配置引用扫描：无残留 - `omx doctor`：22 passed，0 warnings，0 failed - `omx exec`：成功返回 `omx-exec-ok` - sessionstart、userpromptsubmit、stop hooks 全部成功 仅剩 windows 文件 fsync 的非致命耐久性警告，不影响 omx 正常运行。 参考：[superpowers readme](https://github.com/obra/superpowers/blob/main/readme.md)、[oh-my-openagent readme](https://github.com/code-yeongyu/oh-my-openagent/blob/dev/readme.md)。",
+        "first_seen_at": "2026-08-14T14:59:15.248Z",
+        "last_seen_at": "2026-08-14T14:59:15.248Z",
+        "repeat_count": 1,
+        "last_turn_id": "01a000b8-6f65-7a62-a986-47d4043cbb7d",
+        "last_thread_id": null
+      }
+    },
+    "omx-1786719494904-v9ws6i": {
+      "ordinary_no_progress_guard": {
+        "fingerprint": "ordinary|omx-exec-ok",
+        "first_seen_at": "2026-08-14T14:58:35.236Z",
+        "last_seen_at": "2026-08-14T14:58:35.236Z",
+        "repeat_count": 1,
+        "last_turn_id": "01a000c7-fa61-7082-95f2-b8dd31f7c721",
+        "last_thread_id": null
+      }
+    }
+  }
+}

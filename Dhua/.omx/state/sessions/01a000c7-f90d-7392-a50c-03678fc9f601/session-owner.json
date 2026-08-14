@@ -1,0 +1,14 @@
+{
+  "session_id": "01a000c7-f90d-7392-a50c-03678fc9f601",
+  "native_session_id": "01a000c7-f90d-7392-a50c-03678fc9f601",
+  "started_at": "2026-08-14T14:58:27.906Z",
+  "cwd": "C:\\Users\\depths\\Desktop\\cnooc\\code\\Dhua",
+  "state_root": "C:\\Users\\depths\\Desktop\\cnooc\\code\\Dhua\\.omx\\state\\sessions\\01a000c7-f90d-7392-a50c-03678fc9f601",
+  "pid": 27236,
+  "platform": "win32",
+  "identity_schema_version": 2,
+  "process_identity": {
+    "platform": "win32",
+    "birth": "134311930960980999"
+  }
+}
