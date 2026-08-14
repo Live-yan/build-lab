@@ -64,7 +64,7 @@ LLONG login_device(const char* ip, int port, const char* user, const char* passw
                      CLIENT_GetLastError(), out.nError);
     } else {
         std::printf("login success: %s:%d, channels=%d\n", ip, port,
-                    static_cast<int>(out.stuDeviceInfo.byChanNum));
+                    static_cast<int>(out.stuDeviceInfo.nChanNum));
     }
     return handle;
 }
