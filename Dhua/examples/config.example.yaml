@@ -1,0 +1,53 @@
+version: 1
+
+defaults:
+  # Direct NetSDK device/NVR address, not the DSS/ICC web service address.
+  host: "192.168.1.108"
+  port: 37777
+  username: "${DAHUA_USERNAME}"
+  password: "${DAHUA_PASSWORD}"
+
+  # All downloads are MP4 in config mode.
+  outputDir: "./recordings"
+  filenameTemplate: "{name}_{start}_{end}.mp4"
+  recordType: 0
+  downloadTimeoutSeconds: 600
+  overwrite: false
+
+# channelId is retained as the DSS/ICC channel code/metadata.
+# sdkChannel is the integer channel passed to Dahua NetSDK and is strongly recommended.
+# If sdkChannel is omitted and channelId ends in $<number>, the examples derive the
+# last number and print a warning so the mapping is visible.
+devices:
+  - name: "1号集合点云台"
+    channelId: "1000040$1$0$3"
+    sdkChannel: 3
+    timeRanges:
+      - start: "2026-08-14T10:00:00"
+        end: "2026-08-14T10:05:00"
+      - start: "2026-08-14T14:00:00"
+        end: "2026-08-14T14:03:00"
+
+  - name: "2号应急集合点摄像头"
+    channelId: "1000040$1$0$1"
+    sdkChannel: 1
+    timeRanges:
+      - start: "2026-08-14T10:00:00"
+        end: "2026-08-14T10:05:00"
+
+  # A device can override connection/account/output settings when it is not on
+  # the same NVR/device as defaults.
+  - name: "独立摄像头示例"
+    channelId: "1000050$1$0$0"
+    sdkChannel: 0
+    host: "192.168.1.109"
+    port: 37777
+    username: "admin"
+    password: "${DAHUA_CAMERA_109_PASSWORD}"
+    outputDir: "./recordings/camera-109"
+    recordType: 0
+    downloadTimeoutSeconds: 900
+    overwrite: false
+    timeRanges:
+      - start: "2026-08-14T09:30:00"
+        end: "2026-08-14T09:40:00"
