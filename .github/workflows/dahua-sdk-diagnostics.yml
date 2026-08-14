@@ -1,12 +1,6 @@
-name: Dahua SDK diagnostics
+name: Dahua SDK validate and package
 
 on:
-  push:
-    branches:
-      - test/dahua-sdk-examples
-    paths:
-      - 'Dhua/**'
-      - '.github/workflows/dahua-sdk-diagnostics.yml'
   pull_request:
     branches:
       - main
@@ -19,64 +13,225 @@ permissions:
   contents: read
 
 jobs:
-  inspect-c-linux64:
-    runs-on: ubuntu-24.04
+  build-c:
+    name: C SDK ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux64
+            runner: ubuntu-24.04
+            package: c-linux64
+            sdk_archive: Dhua/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515
+          - name: aarch64
+            runner: ubuntu-24.04-arm
+            package: c-aarch64
+            sdk_archive: Dhua/设备网络SDK_C_aarch64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_aarch64_IS_V3.061.0000000.0.R.260515
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
         with:
           lfs: true
-      - name: Inspect exact C API signatures
+
+      - name: Extract SDK and verify architecture
         shell: bash
         run: |
           set -euxo pipefail
-          SDK='Dhua/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515'
-          mkdir -p /tmp/dahua-c64
-          tar -xf "$SDK" -C /tmp/dahua-c64
-          HEADER=/tmp/dahua-c64/Include/Common/dhnetsdk.h
-          echo '=== callback typedefs ==='
-          grep -n -B3 -A8 -E 'fTimeDownLoadPosCallBack|fDataCallBack' "$HEADER" | head -160 || true
-          echo '=== download status/stop APIs ==='
-          grep -n -B2 -A3 -E 'CLIENT_(GetDownloadPos|StopDownload|DownloadByTimeEx)' "$HEADER" | head -160 || true
-          echo '=== official playback demo callback/download code ==='
-          sed -n '1,90p;585,635p' /tmp/dahua-c64/Demo/03.PlayBack/dialog.cpp
+          rm -rf "$RUNNER_TEMP/dahua-sdk"
+          mkdir -p "$RUNNER_TEMP/dahua-sdk"
+          tar -xf "${{ matrix.sdk_archive }}" -C "$RUNNER_TEMP/dahua-sdk"
+          file "$RUNNER_TEMP/dahua-sdk/Bin/libdhnetsdk.so"
+          test -f "$RUNNER_TEMP/dahua-sdk/Include/Common/dhnetsdk.h"
+          test -f "$RUNNER_TEMP/dahua-sdk/Bin/libdhnetsdk.so"
 
-  inspect-c-aarch64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v5
+      - name: Compile C SDK example
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK="$RUNNER_TEMP/dahua-sdk"
+          STAGE="$GITHUB_WORKSPACE/dist/${{ matrix.package }}"
+          mkdir -p "$STAGE/lib"
+          g++ -std=c++17 -O2 -Wall -Wextra \
+            -I"$SDK/Include/Common" \
+            "$GITHUB_WORKSPACE/Dhua/examples/c/dahua_download.cpp" \
+            -L"$SDK/Bin" -Wl,-rpath,'$ORIGIN/lib' -Wl,-rpath-link,"$SDK/Bin" \
+            -ldhnetsdk -lpthread -ldl \
+            -o "$STAGE/dahua_download"
+          cp -a "$SDK"/Bin/*.so* "$STAGE/lib/"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/c/dahua_download.cpp" "$STAGE/"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/c/run.sh" "$STAGE/"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/README.md" "$STAGE/README.md"
+          chmod +x "$STAGE/dahua_download" "$STAGE/run.sh"
+          file "$STAGE/dahua_download"
+          ldd "$STAGE/dahua_download"
+
+      - name: Native SDK load/init smoke test
+        shell: bash
+        run: |
+          set -euxo pipefail
+          "dist/${{ matrix.package }}/run.sh" --sdk-smoke
+
+      - name: Optional real device login/download test
+        shell: bash
+        env:
+          DAHUA_HOST: ${{ secrets.DAHUA_HOST }}
+          DAHUA_PORT: ${{ secrets.DAHUA_PORT }}
+          DAHUA_USERNAME: ${{ secrets.DAHUA_USERNAME }}
+          DAHUA_PASSWORD: ${{ secrets.DAHUA_PASSWORD }}
+          DAHUA_CHANNEL: ${{ secrets.DAHUA_CHANNEL }}
+          DAHUA_START: ${{ secrets.DAHUA_START }}
+          DAHUA_END: ${{ secrets.DAHUA_END }}
+          DAHUA_DOWNLOAD_TIMEOUT_SECONDS: '300'
+        run: |
+          set -euo pipefail
+          if [[ -z "${DAHUA_HOST:-}" || -z "${DAHUA_USERNAME:-}" || -z "${DAHUA_PASSWORD:-}" ]]; then
+            echo 'Real device test skipped: DAHUA_HOST/DAHUA_USERNAME/DAHUA_PASSWORD are not configured.'
+            exit 0
+          fi
+          PORT="${DAHUA_PORT:-37777}"
+          CHANNEL="${DAHUA_CHANNEL:-0}"
+          EXE="dist/${{ matrix.package }}/run.sh"
+          "$EXE" --login-test "$DAHUA_HOST" "$PORT" "$DAHUA_USERNAME" "$DAHUA_PASSWORD"
+          if [[ -n "${DAHUA_START:-}" && -n "${DAHUA_END:-}" ]]; then
+            OUT="$RUNNER_TEMP/${{ matrix.package }}-download.dav"
+            "$EXE" "$DAHUA_HOST" "$PORT" "$DAHUA_USERNAME" "$DAHUA_PASSWORD" \
+              "$CHANNEL" "$DAHUA_START" "$DAHUA_END" "$OUT"
+            test -s "$OUT"
+            echo "Real recording download test OK: $(stat -c '%s bytes' "$OUT")"
+          else
+            echo 'Login/logout passed; recording download skipped because DAHUA_START/DAHUA_END are not configured.'
+          fi
+
+      - uses: actions/upload-artifact@v4
         with:
-          lfs: true
-      - name: Verify aarch64 C SDK API and libraries
-        shell: bash
-        run: |
-          set -euxo pipefail
-          SDK='Dhua/设备网络SDK_C_aarch64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_aarch64_IS_V3.061.0000000.0.R.260515'
-          mkdir -p /tmp/dahua-carm
-          tar -xf "$SDK" -C /tmp/dahua-carm
-          file /tmp/dahua-carm/Bin/libdhnetsdk.so
-          grep -n -E 'CLIENT_LoginWithHighLevelSecurity|CLIENT_Logout\(|CLIENT_DownloadByTimeEx\(' /tmp/dahua-carm/Include/Common/dhnetsdk.h | head -30
+          name: ${{ matrix.package }}
+          path: dist/${{ matrix.package }}
+          if-no-files-found: error
+          retention-days: 14
 
-  inspect-jar-arm:
+  build-jar:
+    name: JAR SDK linuxARM
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v5
+
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
-      - name: Inspect exact Java callback signatures
+
+      - name: Compile JAR SDK example
         shell: bash
         run: |
           set -euxo pipefail
-          ROOT='Dhua/设备网络SDK_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511/General_NetSDK_ChnEng_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511'
-          API="$ROOT/src/main/resources/netsdk-api-linuxARM-1.0.jar"
-          DYN="$ROOT/src/main/resources/netsdk-dynamic-lib-linuxARM-1.0.jar"
-          JNA="$ROOT/src/main/resources/jna.jar"
-          SRC="$ROOT/source/netsdk-api-linuxARM-1.0-sources.jar"
-          echo '=== NetSDKLib relevant source ==='
-          unzip -p "$SRC" com/netsdk/lib/NetSDKLib.java > /tmp/NetSDKLib.java
-          grep -n -B4 -A12 -E 'interface fTimeDownLoadPosCallBack|interface fDataCallBack|CLIENT_DownloadByTimeEx\(|CLIENT_StopDownload\(|CLIENT_GetDownloadPos\(' /tmp/NetSDKLib.java | head -260 || true
-          echo '=== binary signatures ==='
-          javap -classpath "$API:$JNA" com.netsdk.lib.NetSDKLib | grep -E 'CLIENT_(DownloadByTimeEx|StopDownload|GetDownloadPos|LoginWithHighLevelSecurity|Logout)' || true
-          echo '=== native bundle ==='
-          jar tf "$DYN" | grep -E 'linuxARM/.*\.so$'
+          ROOT="$GITHUB_WORKSPACE/Dhua/设备网络SDK_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511/General_NetSDK_ChnEng_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511"
+          RES="$ROOT/src/main/resources"
+          STAGE="$GITHUB_WORKSPACE/dist/jar-linuxarm"
+          CLASSES="$RUNNER_TEMP/dahua-java-classes"
+          mkdir -p "$STAGE/lib" "$CLASSES"
+          test -f "$RES/jna.jar"
+          test -f "$RES/netsdk-api-linuxARM-1.0.jar"
+          test -f "$RES/netsdk-dynamic-lib-linuxARM-1.0.jar"
+          javac -encoding UTF-8 -cp "$RES/*" -d "$CLASSES" \
+            "$GITHUB_WORKSPACE/Dhua/examples/jar/DahuaDownloadExample.java"
+          jar --create --file "$STAGE/dahua-download-example.jar" \
+            --main-class DahuaDownloadExample -C "$CLASSES" .
+          cp "$RES/jna.jar" "$STAGE/lib/"
+          cp "$RES/netsdk-api-linuxARM-1.0.jar" "$STAGE/lib/"
+          cp "$RES/netsdk-dynamic-lib-linuxARM-1.0.jar" "$STAGE/lib/"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/jar/DahuaDownloadExample.java" "$STAGE/"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/jar/run.sh" "$STAGE/"
+          cp "$GITHUB_WORKSPACE/Dhua/examples/README.md" "$STAGE/README.md"
+          chmod +x "$STAGE/run.sh"
+          jar tf "$STAGE/dahua-download-example.jar" | grep 'DahuaDownloadExample.class'
+
+      - name: Native JAR SDK load/init smoke test
+        shell: bash
+        run: |
+          set -euxo pipefail
+          uname -m
+          "dist/jar-linuxarm/run.sh" --sdk-smoke
+
+      - name: Optional real device login/download test
+        shell: bash
+        env:
+          DAHUA_HOST: ${{ secrets.DAHUA_HOST }}
+          DAHUA_PORT: ${{ secrets.DAHUA_PORT }}
+          DAHUA_USERNAME: ${{ secrets.DAHUA_USERNAME }}
+          DAHUA_PASSWORD: ${{ secrets.DAHUA_PASSWORD }}
+          DAHUA_CHANNEL: ${{ secrets.DAHUA_CHANNEL }}
+          DAHUA_START: ${{ secrets.DAHUA_START }}
+          DAHUA_END: ${{ secrets.DAHUA_END }}
+          DAHUA_DOWNLOAD_TIMEOUT_SECONDS: '300'
+        run: |
+          set -euo pipefail
+          if [[ -z "${DAHUA_HOST:-}" || -z "${DAHUA_USERNAME:-}" || -z "${DAHUA_PASSWORD:-}" ]]; then
+            echo 'Real device test skipped: DAHUA_HOST/DAHUA_USERNAME/DAHUA_PASSWORD are not configured.'
+            exit 0
+          fi
+          PORT="${DAHUA_PORT:-37777}"
+          CHANNEL="${DAHUA_CHANNEL:-0}"
+          EXE="dist/jar-linuxarm/run.sh"
+          "$EXE" --login-test "$DAHUA_HOST" "$PORT" "$DAHUA_USERNAME" "$DAHUA_PASSWORD"
+          if [[ -n "${DAHUA_START:-}" && -n "${DAHUA_END:-}" ]]; then
+            OUT="$RUNNER_TEMP/jar-linuxarm-download.dav"
+            "$EXE" "$DAHUA_HOST" "$PORT" "$DAHUA_USERNAME" "$DAHUA_PASSWORD" \
+              "$CHANNEL" "$DAHUA_START" "$DAHUA_END" "$OUT"
+            test -s "$OUT"
+            echo "Real recording download test OK: $(stat -c '%s bytes' "$OUT")"
+          else
+            echo 'Login/logout passed; recording download skipped because DAHUA_START/DAHUA_END are not configured.'
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jar-linuxarm
+          path: dist/jar-linuxarm
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: Package all runnable examples
+    needs: [build-c, build-jar]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: c-linux64
+          path: bundle/c-linux64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: c-aarch64
+          path: bundle/c-aarch64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: jar-linuxarm
+          path: bundle/jar-linuxarm
+
+      - name: Assemble final bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cp Dhua/examples/README.md bundle/README.md
+          chmod +x bundle/c-linux64/run.sh bundle/c-linux64/dahua_download
+          chmod +x bundle/c-aarch64/run.sh bundle/c-aarch64/dahua_download
+          chmod +x bundle/jar-linuxarm/run.sh
+          tar -czf dahua-sdk-download-examples.tar.gz -C bundle .
+          (cd bundle && zip -qr ../dahua-sdk-download-examples.zip .)
+          find bundle -maxdepth 3 -type f -printf '%p %k KB\n' | sort
+          sha256sum dahua-sdk-download-examples.tar.gz dahua-sdk-download-examples.zip > SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dahua-sdk-download-examples
+          path: |
+            bundle
+            dahua-sdk-download-examples.tar.gz
+            dahua-sdk-download-examples.zip
+            SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
