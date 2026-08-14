@@ -1,0 +1,96 @@
+name: Dahua SDK diagnostics
+
+on:
+  push:
+    branches:
+      - test/dahua-sdk-examples
+    paths:
+      - 'Dhua/**'
+      - '.github/workflows/dahua-sdk-diagnostics.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-c-linux64:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Inspect and extract C Linux64 SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK='Dhua/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_Linux64_IS_V3.061.0000000.0.R.260515'
+          git lfs ls-files
+          ls -lh "$SDK"
+          file "$SDK"
+          mkdir -p /tmp/dahua-c64
+          7z x -y "$SDK" -o/tmp/dahua-c64 >/tmp/7z-c64.log 2>&1 || {
+            cat /tmp/7z-c64.log
+            tar -xf "$SDK" -C /tmp/dahua-c64
+          }
+          echo '=== top files ==='
+          find /tmp/dahua-c64 -maxdepth 4 -type f | head -200
+          echo '=== likely headers/samples ==='
+          find /tmp/dahua-c64 -type f \( -iname '*.h' -o -iname '*.c' -o -iname '*.cpp' -o -iname 'Makefile' \) | head -300
+          echo '=== login/download symbols ==='
+          grep -RInaE 'CLIENT_(Login|Logout|Download|QueryRecord)|DownloadByTime|PlayBack' /tmp/dahua-c64 --include='*.h' --include='*.c' --include='*.cpp' 2>/dev/null | head -300 || true
+
+  inspect-c-aarch64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Inspect and extract C aarch64 SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK='Dhua/设备网络SDK_C_aarch64_IS_V3.061.0000000.0.R.260515/设备网络SDK_C_aarch64_IS_V3.061.0000000.0.R.260515'
+          git lfs ls-files
+          ls -lh "$SDK"
+          file "$SDK"
+          mkdir -p /tmp/dahua-carm
+          7z x -y "$SDK" -o/tmp/dahua-carm >/tmp/7z-carm.log 2>&1 || {
+            cat /tmp/7z-carm.log
+            tar -xf "$SDK" -C /tmp/dahua-carm
+          }
+          echo '=== top files ==='
+          find /tmp/dahua-carm -maxdepth 4 -type f | head -200
+          echo '=== likely headers/samples ==='
+          find /tmp/dahua-carm -type f \( -iname '*.h' -o -iname '*.c' -o -iname '*.cpp' -o -iname 'Makefile' \) | head -300
+          echo '=== login/download symbols ==='
+          grep -RInaE 'CLIENT_(Login|Logout|Download|QueryRecord)|DownloadByTime|PlayBack' /tmp/dahua-carm --include='*.h' --include='*.c' --include='*.cpp' 2>/dev/null | head -300 || true
+
+  inspect-jar-arm:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Inspect JAR SDK API and sources
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ROOT='Dhua/设备网络SDK_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511/General_NetSDK_ChnEng_JAR_LinuxARM_IS_V3.061.0000000.0.R.260511'
+          API="$ROOT/out/production/netsdk-demo/netsdk-api-linuxARM-1.0.jar"
+          DYN="$ROOT/out/production/netsdk-demo/netsdk-dynamic-lib-linuxARM-1.0.jar"
+          JNA="$ROOT/out/production/netsdk-demo/jna.jar"
+          SRC="$ROOT/source/netsdk-api-linuxARM-1.0-sources.jar"
+          ls -lh "$API" "$DYN" "$JNA" "$SRC"
+          echo '=== source classes related to login / record / download / playback ==='
+          jar tf "$SRC" | grep -Ei '(BaseModule|login|logout|download|record|playback|playback)' | head -300 || true
+          echo '=== NetSDKLib native methods ==='
+          javap -classpath "$API:$JNA" com.netsdk.lib.NetSDKLib | grep -Ei 'CLIENT_(Login|Logout|Download|QueryRecord)|DownloadByTime|PlayBack' | head -300 || true
+          echo '=== candidate module source ==='
+          while IFS= read -r entry; do
+            echo "----- $entry -----"
+            unzip -p "$SRC" "$entry" | sed -n '1,260p'
+          done < <(jar tf "$SRC" | grep -Ei '^com/netsdk/module/.*(Base|Record|Download|Play).*\.java$' | head -20)
+          echo '=== native libraries bundled in dynamic jar ==='
+          jar tf "$DYN" | grep -E '\.(so|dll|dylib)$' | head -200 || true
